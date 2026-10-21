@@ -72,6 +72,11 @@ a:focus-visible {
   padding: 24px 20px 99px;
 }
 
+.auth-container {
+  max-width: 1080px;
+  padding: 20px 20px 80px;
+}
+
 .landing-shell {
   display: grid;
   align-content: center;
@@ -217,8 +222,8 @@ a:focus-visible {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 430px;
-  justify-self: end;
+  max-width: 420px;
+  justify-self: center;
   padding: 28px;
   border-radius: 16px;
 }
@@ -244,7 +249,7 @@ a:focus-visible {
   align-items: start;
   gap: 11px;
   margin: 0 0 17px;
-  padding: 14px 15px;
+  padding: 14px 16px;
   border: 1.5px solid #f59e0b;
   border-radius: 12px;
   background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
@@ -277,8 +282,32 @@ a:focus-visible {
 .auth-alert-banner p {
   margin: 0;
   color: #92400e;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.auth-success-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 13px 15px;
+  border: 1px solid #86c9a6;
+  border-radius: 12px;
+  background: #effaf3;
+  color: #286548;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.auth-success-banner > span {
+  color: #398b61;
+  font-size: 16px;
+}
+
+.auth-success-banner p {
+  margin: 0;
 }
 
 .auth-tabs {
@@ -344,9 +373,88 @@ a:focus-visible {
   box-shadow: 0 0 0 3px rgba(96, 175, 185, 0.15);
 }
 
+/* Mantém o controle de visibilidade integrado ao campo sem alterar seu tamanho. */
+.password-field {
+  position: relative;
+  width: 100%;
+}
+
+.password-field input {
+  padding-right: 78px;
+}
+
+.password-field:focus-within input {
+  border-color: var(--turquoise);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(96, 175, 185, 0.15);
+}
+
+.password-visibility {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  padding: 5px 3px;
+  border: 0;
+  background: transparent;
+  color: #398f98;
+  font-size: 10px;
+  font-weight: 700;
+  transform: translateY(-50%);
+}
+
+.password-visibility:hover {
+  color: #277a82;
+}
+
+/* Link de reenvio destaca a ação e informa o tempo de espera do cooldown. */
+.auth-resend-link {
+  width: fit-content;
+  margin-top: 8px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-resend-link:hover:not(:disabled) {
+  color: #78350f;
+}
+
+.auth-resend-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .landing-submit {
   width: 100%;
   margin-top: 8px;
+}
+
+.auth-text-link {
+  width: fit-content;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: #398f98;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(56, 163, 165, 0.4);
+  text-underline-offset: 3px;
+}
+
+.auth-text-link:hover {
+  color: #277a82;
+}
+
+.auth-back-link {
+  margin-top: 15px;
 }
 
 .landing-message {
@@ -1549,20 +1657,27 @@ a:focus-visible {
 
 @media (min-width: 768px) and (max-width: 1023px) {
   .landing-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(315px, 0.95fr);
-    gap: 20px;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    gap: 24px;
+    max-width: 760px;
+  }
+
+  .landing-intro {
+    width: 100%;
   }
 
   .landing-eyebrow {
-    margin-top: 38px;
+    margin-top: 30px;
   }
 
   .landing-intro h1 {
-    font-size: clamp(35px, 5vw, 49px);
+    font-size: clamp(38px, 5vw, 54px);
   }
 
   .landing-auth {
-    padding: 23px;
+    width: min(100%, 420px);
+    padding: 24px;
   }
 
   .challenge-page {

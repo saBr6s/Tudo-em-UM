@@ -8,6 +8,8 @@ import {
 import type { PostgrestError, Session, User } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabaseClient";
 
+type AuthViewMode = "login" | "signup" | "forgot" | "reset";
+
 type Champion = {
   id: string;
   nome: string;
@@ -1340,99 +1342,267 @@ function DesafioApp({ user }: { user: User }) {
   );
 }
 
-function LandingPage({ authError }: { authError: string }) {
-  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+function LandingPage({
+  authError,
+  isPasswordRecovery,
+  onPasswordResetComplete,
+}: {
+  authError: string;
+  isPasswordRecovery: boolean;
+  onPasswordResetComplete: () => void;
+}) {
+  const [viewMode, setViewMode] = useState<AuthViewMode>(
+    isPasswordRecovery ? "reset" : "login",
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [signupConfirmationVisible, setSignupConfirmationVisible] =
+    useState(false);
+  const [newPasswordVisible, setNewPasswordVisible] = useState(false);
+  const [resetConfirmationVisible, setResetConfirmationVisible] =
+    useState(false);
   const [formError, setFormError] = useState("");
   const [notice, setNotice] = useState("");
   const [emailAlert, setEmailAlert] = useState<{
     title: string;
     message: string;
     role: "alert" | "status";
+    canResend?: boolean;
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResetFinishing, setIsResetFinishing] = useState(false);
+  const [isResendingConfirmation, setIsResendingConfirmation] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+    if (isPasswordRecovery) {
+      setViewMode("reset");
+      setFormError("");
+      setNotice("");
+      setEmailAlert(null);
+    }
+  }, [isPasswordRecovery]);
+
+  useEffect(() => {
+    if (resendCooldown === 0) return;
+    const timer = window.setInterval(() => {
+      setResendCooldown((remaining) => Math.max(0, remaining - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
+
+  function clearFeedback() {
     setFormError("");
     setNotice("");
     setEmailAlert(null);
+  }
 
-    if (password.length < 6) {
-      setFormError("A senha precisa ter pelo menos 6 caracteres.");
-      return;
-    }
+  function isRateLimitError(error: { code?: string; status?: number }) {
+    return (
+      error.status === 429 ||
+      error.code === "over_request_rate_limit" ||
+      error.code === "too_many_requests"
+    );
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    clearFeedback();
+
     if (!supabase) {
       setFormError("A conexão com o serviço de contas não está configurada.");
       return;
     }
 
+    if (
+      (viewMode === "login" || viewMode === "signup") &&
+      password.length < 6
+    ) {
+      setFormError("A senha precisa ter no mínimo 6 caracteres.");
+      return;
+    }
+
+    if (viewMode === "signup" && password !== confirmPassword) {
+      setFormError("As senhas não coincidem.");
+      return;
+    }
+
+    if (viewMode === "reset") {
+      if (newPassword.length < 6) {
+        setFormError("A nova senha precisa ter pelo menos 6 caracteres.");
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setFormError("As senhas informadas não são iguais.");
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
-      const result =
-        authMode === "login"
-          ? await supabase.auth.signInWithPassword({
-              email: email.trim(),
-              password,
-            })
-          : await supabase.auth.signUp({
-              email: email.trim(),
-              password,
+      if (viewMode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (error) {
+          console.error(
+            "Erro detalhado do SignIn:",
+            error.message,
+            error.status,
+          );
+          if (
+            error.message.includes("Email not confirmed") ||
+            error.status === 422
+          ) {
+            setEmailAlert({
+              title: "Confirmação necessária",
+              message:
+                "E-mail pendente de confirmação. Verifique sua caixa de entrada ou o painel de usuários.",
+              role: "alert",
+              canResend: true,
             });
+          } else if (error.message.includes("Invalid login credentials")) {
+            setFormError("E-mail ou senha incorretos.");
+          } else {
+            setFormError(error.message);
+          }
+        }
+        return;
+      }
 
-      if (result.error) {
-        if (
-          authMode === "login" &&
-          (result.error.code === "email_not_confirmed" ||
-            /email not confirmed|email_not_confirmed/i.test(
-              result.error.message,
-            ))
-        ) {
+      if (viewMode === "signup") {
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+        });
+        if (error) {
+          console.error(
+            "Erro detalhado do SignUp:",
+            error.message,
+            error.status,
+          );
+          setFormError(
+            error.message === "User already registered" || error.status === 400
+              ? "Este e-mail já está cadastrado. Tente entrar na aba 'Entrar' ou recupere sua senha."
+              : error.message,
+          );
+          return;
+        }
+
+        if (data.session) {
+          setNotice("Conta criada e conectada! Os ventos estão abrindo seu caminho...");
+          return;
+        }
+
+        if (data.user && !data.session) {
+          setPassword("");
+          setConfirmPassword("");
+          setViewMode("login");
           setEmailAlert({
-            title: "E-mail não verificado",
+            title: "Verifique seu e-mail!",
             message:
-              "Você precisa confirmar sua conta antes de continuar. Verifique o link que enviamos para o seu e-mail cadastrado.",
-            role: "alert",
+              "Enviamos um link de confirmação para sua caixa de entrada (e spam). Clique nele para ativar sua conta antes de entrar.",
+            role: "status",
+            canResend: true,
           });
           return;
         }
 
-        setFormError(
-          authMode === "login"
-            ? "E-mail ou senha inválidos. Confira seus dados e tente novamente."
-            : "Não foi possível criar a conta. Confira o e-mail e tente novamente.",
+        setNotice("Conta criada! Os ventos estão abrindo seu caminho...");
+        return;
+      }
+
+      if (viewMode === "forgot") {
+        const { error } = await supabase.auth.resetPasswordForEmail(
+          email.trim(),
+          { redirectTo: window.location.origin },
+        );
+        if (error) {
+          setFormError(
+            isRateLimitError(error)
+              ? "⚠️ Limite de requisições temporariamente atingido. Aguarde alguns instantes."
+              : "Não foi possível enviar o link. Confira o e-mail e tente novamente.",
+          );
+          return;
+        }
+        setNotice(
+          "Link de redefinição enviado para o e-mail, verifique sua caixa de entrada e a pasta de spam.",
         );
         return;
       }
 
-      if (authMode === "signup" && result.data.user && !result.data.session) {
-        setEmail(email.trim());
-        setPassword("");
-        setAuthMode("login");
-        setEmailAlert({
-          title: "Quase lá! Confirme seu e-mail",
-          message:
-            "Enviamos um link de confirmação para o seu e-mail. Acesse sua caixa de entrada (e a pasta de spam) e clique no link antes de entrar no desafio.",
-          role: "status",
-        });
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+      if (error) {
+        setFormError(
+          isRateLimitError(error)
+            ? "⚠️ Limite de requisições temporariamente atingido. Aguarde alguns instantes."
+            : "Não foi possível atualizar a senha. Abra novamente o link recebido e tente de novo.",
+        );
         return;
       }
 
-      setNotice(
-        authMode === "signup"
-          ? "Conta criada! Os ventos estão abrindo seu caminho..."
-          : "Acesso confirmado. Os ventos estão abrindo seu caminho...",
-      );
-    } catch {
+      setNotice("Senha redefinida com sucesso! Abrindo sua jornada...");
+      setIsResetFinishing(true);
+      window.setTimeout(onPasswordResetComplete, 1400);
+    } catch (error) {
+      console.error("Erro inesperado na autenticação do Supabase:", error);
       setFormError("Falha de conexão. Verifique sua internet e tente novamente.");
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  async function resendConfirmationEmail() {
+    if (!supabase || !email.trim() || resendCooldown > 0) return;
+
+    setIsResendingConfirmation(true);
+    setFormError("");
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: email.trim(),
+      });
+      if (error) {
+        console.error("Erro ao reenviar confirmação do e-mail:", error);
+        setFormError(
+          isRateLimitError(error)
+            ? "Limite de requisições atingido. Aguarde antes de tentar novamente."
+            : error.message,
+        );
+        return;
+      }
+
+      setEmailAlert({
+        title: "E-mail de ativação reenviado",
+        message: "Novo e-mail de ativação enviado com sucesso!",
+        role: "status",
+        canResend: true,
+      });
+      setResendCooldown(60);
+    } catch (error) {
+      console.error("Falha ao reenviar confirmação do e-mail:", error);
+      setFormError("Não foi possível reenviar o e-mail. Tente novamente.");
+    } finally {
+      setIsResendingConfirmation(false);
+    }
+  }
+
+  const titleByMode: Record<AuthViewMode, string> = {
+    login: "Boas-vindas",
+    signup: "Crie sua conta",
+    forgot: "Recuperar acesso",
+    reset: "Nova senha",
+  };
+  const isPasswordView = viewMode === "login" || viewMode === "signup";
+
   return (
-    <main className="site-shell landing-shell">
+    <main className="site-shell landing-shell auth-container">
       <div className="sky-glow sky-glow-left" aria-hidden="true" />
       <div className="sky-glow sky-glow-right" aria-hidden="true" />
       <section className="landing-layout" aria-label="Apresentação e acesso">
@@ -1469,11 +1639,20 @@ function LandingPage({ authError }: { authError: string }) {
         </div>
 
         <section className="landing-auth glass-card" aria-label="Acesse sua conta">
-          <p className="section-kicker">SUA JORNADA COMEÇA AQUI</p>
-          <h2>{authMode === "login" ? "Boas-vindas" : "Crie sua conta"}</h2>
-          <p className="auth-intro-copy">
-            Conecte-se para salvar seu progresso e suas conquistas.
+          <p className="section-kicker">
+            {viewMode === "reset"
+              ? "RECUPERAÇÃO SEGURA"
+              : "SUA JORNADA COMEÇA AQUI"}
           </p>
+          <h2>{titleByMode[viewMode]}</h2>
+          <p className="auth-intro-copy">
+            {viewMode === "forgot"
+              ? "Informe o e-mail da sua conta para receber um link de recuperação."
+              : viewMode === "reset"
+                ? "Escolha uma nova senha para voltar à sua jornada."
+                : "Conecte-se para salvar seu progresso e suas conquistas."}
+          </p>
+
           {emailAlert && (
             <div
               className="auth-alert-banner"
@@ -1486,91 +1665,275 @@ function LandingPage({ authError }: { authError: string }) {
               <div>
                 <strong>{emailAlert.title}</strong>
                 <p>{emailAlert.message}</p>
+                {emailAlert.canResend && (
+                  <button
+                    className="auth-resend-link"
+                    type="button"
+                    onClick={() => void resendConfirmationEmail()}
+                    disabled={
+                      isResendingConfirmation ||
+                      resendCooldown > 0 ||
+                      !email.trim()
+                    }
+                  >
+                    {isResendingConfirmation
+                      ? "Reenviando..."
+                      : resendCooldown > 0
+                        ? `Reenviar e-mail (${resendCooldown}s)`
+                        : "Reenviar e-mail de confirmação"}
+                  </button>
+                )}
               </div>
             </div>
           )}
-          <div className="auth-tabs" role="tablist" aria-label="Acesso à conta">
-            <button
-              className={authMode === "login" ? "auth-tab active" : "auth-tab"}
-              type="button"
-              role="tab"
-              aria-selected={authMode === "login"}
-              onClick={() => {
-                setAuthMode("login");
-                setFormError("");
-                setNotice("");
-                setEmailAlert(null);
-              }}
-            >
-              Entrar
-            </button>
-            <button
-              className={authMode === "signup" ? "auth-tab active" : "auth-tab"}
-              type="button"
-              role="tab"
-              aria-selected={authMode === "signup"}
-              onClick={() => {
-                setAuthMode("signup");
-                setFormError("");
-                setNotice("");
-                setEmailAlert(null);
-              }}
-            >
-              Criar Conta
-            </button>
-          </div>
+
+          {viewMode !== "forgot" && viewMode !== "reset" && (
+            <div className="auth-tabs" role="tablist" aria-label="Acesso à conta">
+              <button
+                className={viewMode === "login" ? "auth-tab active" : "auth-tab"}
+                type="button"
+                role="tab"
+                aria-selected={viewMode === "login"}
+                onClick={() => {
+                  setViewMode("login");
+                  clearFeedback();
+                }}
+              >
+                Entrar
+              </button>
+              <button
+                className={viewMode === "signup" ? "auth-tab active" : "auth-tab"}
+                type="button"
+                role="tab"
+                aria-selected={viewMode === "signup"}
+                onClick={() => {
+                  setViewMode("signup");
+                  clearFeedback();
+                }}
+              >
+                Criar Conta
+              </button>
+            </div>
+          )}
+
+          {notice && (
+            <div className="auth-success-banner" role="status" aria-live="polite">
+              <span aria-hidden="true">✦</span>
+              <p>{notice}</p>
+            </div>
+          )}
+
           <form className="landing-form" onSubmit={submit}>
-            <label htmlFor="landing-email">E-mail</label>
-            <input
-              id="landing-email"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="voce@exemplo.com"
-              disabled={isSubmitting || !supabase}
-            />
-            <label htmlFor="landing-password">Senha</label>
-            <input
-              id="landing-password"
-              type="password"
-              autoComplete={
-                authMode === "signup" ? "new-password" : "current-password"
-              }
-              minLength={6}
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Pelo menos 6 caracteres"
-              disabled={isSubmitting || !supabase}
-            />
+            {viewMode !== "reset" && (
+              <>
+                <label htmlFor="landing-email">E-mail</label>
+                <input
+                  id="landing-email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="voce@exemplo.com"
+                  disabled={isSubmitting || !supabase}
+                />
+              </>
+            )}
+
+            {isPasswordView && (
+              <>
+                <label htmlFor="landing-password">Senha</label>
+                <div className="password-field">
+                  <input
+                    id="landing-password"
+                    type={passwordVisible ? "text" : "password"}
+                    autoComplete={
+                      viewMode === "signup"
+                        ? "new-password"
+                        : "current-password"
+                    }
+                    minLength={6}
+                    required
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="Pelo menos 6 caracteres"
+                    disabled={isSubmitting || !supabase}
+                  />
+                  <button
+                    className="password-visibility"
+                    type="button"
+                    aria-label={passwordVisible ? "Ocultar senha" : "Mostrar senha"}
+                    aria-pressed={passwordVisible}
+                    onClick={() => setPasswordVisible((visible) => !visible)}
+                  >
+                    {passwordVisible ? "Ocultar" : "Mostrar"}
+                  </button>
+                </div>
+                {viewMode === "signup" && (
+                  <>
+                    <label htmlFor="signup-confirm-password">
+                      Confirmar Senha
+                    </label>
+                    <div className="password-field">
+                      <input
+                        id="signup-confirm-password"
+                        type={
+                          signupConfirmationVisible ? "text" : "password"
+                        }
+                        autoComplete="new-password"
+                        minLength={6}
+                        required
+                        value={confirmPassword}
+                        onChange={(event) =>
+                          setConfirmPassword(event.target.value)
+                        }
+                        placeholder="Digite a senha novamente"
+                        disabled={isSubmitting || !supabase}
+                      />
+                      <button
+                        className="password-visibility"
+                        type="button"
+                        aria-label={
+                          signupConfirmationVisible
+                            ? "Ocultar confirmação de senha"
+                            : "Mostrar confirmação de senha"
+                        }
+                        aria-pressed={signupConfirmationVisible}
+                        onClick={() =>
+                          setSignupConfirmationVisible((visible) => !visible)
+                        }
+                      >
+                        {signupConfirmationVisible ? "Ocultar" : "Mostrar"}
+                      </button>
+                    </div>
+                  </>
+                )}
+                {viewMode === "login" && (
+                  <button
+                    className="auth-text-link"
+                    type="button"
+                    onClick={() => {
+                      setViewMode("forgot");
+                      clearFeedback();
+                    }}
+                  >
+                    Esqueceu sua senha?
+                  </button>
+                )}
+              </>
+            )}
+
+            {viewMode === "reset" && (
+              <>
+                <label htmlFor="new-password">Nova senha</label>
+                <div className="password-field">
+                  <input
+                    id="new-password"
+                    type={newPasswordVisible ? "text" : "password"}
+                    autoComplete="new-password"
+                    minLength={6}
+                    required
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    placeholder="Pelo menos 6 caracteres"
+                    disabled={isSubmitting || !supabase}
+                  />
+                  <button
+                    className="password-visibility"
+                    type="button"
+                    aria-label={
+                      newPasswordVisible ? "Ocultar nova senha" : "Mostrar nova senha"
+                    }
+                    aria-pressed={newPasswordVisible}
+                    onClick={() => setNewPasswordVisible((visible) => !visible)}
+                  >
+                    {newPasswordVisible ? "Ocultar" : "Mostrar"}
+                  </button>
+                </div>
+                <label htmlFor="confirm-password">Confirme a nova senha</label>
+                <div className="password-field">
+                  <input
+                    id="confirm-password"
+                    type={
+                      resetConfirmationVisible ? "text" : "password"
+                    }
+                    autoComplete="new-password"
+                    minLength={6}
+                    required
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    placeholder="Digite a senha novamente"
+                    disabled={isSubmitting || !supabase}
+                  />
+                  <button
+                    className="password-visibility"
+                    type="button"
+                    aria-label={
+                      resetConfirmationVisible
+                        ? "Ocultar confirmação de senha"
+                        : "Mostrar confirmação de senha"
+                    }
+                    aria-pressed={resetConfirmationVisible}
+                    onClick={() =>
+                      setResetConfirmationVisible((visible) => !visible)
+                    }
+                  >
+                    {resetConfirmationVisible ? "Ocultar" : "Mostrar"}
+                  </button>
+                </div>
+              </>
+            )}
+
             {(formError || authError) && (
               <p className="landing-message error" role="alert">
                 {formError || authError}
               </p>
             )}
-            {notice && (
-              <p className="landing-message success" role="status">
-                {notice}
-              </p>
-            )}
+
             <button
               className="primary-button landing-submit"
               type="submit"
-              disabled={isSubmitting || !supabase}
+              disabled={
+                isSubmitting || isResetFinishing || !supabase
+              }
             >
               {isSubmitting
                 ? "Invocando..."
-                : authMode === "login"
-                  ? "Entrar na jornada"
-                  : "Criar minha conta"}
+                : viewMode === "login"
+                  ? "Invocar Ventos (Entrar)"
+                  : viewMode === "signup"
+                    ? "Criar minha conta"
+                    : viewMode === "forgot"
+                      ? "Enviar link de recuperação"
+                      : "Salvar nova senha"}
               {!isSubmitting && <span aria-hidden="true">↗</span>}
             </button>
           </form>
-          <p className="landing-note">
-            ✧ Seu progresso fica protegido e sincronizado com sua conta.
-          </p>
+
+          {viewMode === "forgot" && (
+            <button
+              className="auth-text-link auth-back-link"
+              type="button"
+              onClick={() => {
+                setViewMode("login");
+                clearFeedback();
+              }}
+            >
+              ← Voltar ao login
+            </button>
+          )}
+
+          {viewMode === "reset" && (
+            <p className="landing-note">
+              ✧ Esta página só pode ser acessada pelo link de recuperação enviado ao seu e-mail.
+            </p>
+          )}
+
+          {viewMode !== "reset" && (
+            <p className="landing-note">
+              ✧ Seu progresso fica protegido e sincronizado com sua conta.
+            </p>
+          )}
         </section>
       </section>
       <footer className="footer-runeterra site-footer">
@@ -1584,6 +1947,7 @@ function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState("");
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
 
   useEffect(() => {
     if (!supabase) {
@@ -1598,9 +1962,12 @@ function App() {
     let authEventVersion = 0;
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
       authEventVersion += 1;
       setSession(nextSession);
+      if (event === "PASSWORD_RECOVERY") {
+        setIsPasswordRecovery(true);
+      }
       setAuthError("");
       setLoadingAuth(false);
     });
@@ -1631,6 +1998,40 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (
+      !supabase ||
+      !session ||
+      session.user.email_confirmed_at ||
+      isPasswordRecovery
+    ) {
+      return;
+    }
+
+    let active = true;
+    void supabase.auth
+      .signOut()
+      .then(({ error }) => {
+        if (!active) return;
+        setAuthError(
+          error
+            ? "Esta conta precisa confirmar o e-mail antes de acessar o desafio. Saia e entre novamente após confirmar."
+            : "E-mail não confirmado. Verifique sua caixa de entrada e confirme a conta antes de acessar o desafio.",
+        );
+      })
+      .catch(() => {
+        if (active) {
+          setAuthError(
+            "Não foi possível encerrar a sessão não confirmada. Tente novamente.",
+          );
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [session, isPasswordRecovery]);
+
   if (loadingAuth) {
     return (
       <main className="auth-loading">
@@ -1640,8 +2041,14 @@ function App() {
     );
   }
 
-  if (!session) {
-    return <LandingPage authError={authError} />;
+  if (!session || isPasswordRecovery || !session.user.email_confirmed_at) {
+    return (
+      <LandingPage
+        authError={authError}
+        isPasswordRecovery={isPasswordRecovery}
+        onPasswordResetComplete={() => setIsPasswordRecovery(false)}
+      />
+    );
   }
 
   return <DesafioApp key={session.user.id} user={session.user} />;
