@@ -1,0 +1,33 @@
+-- BANCO DE DADOS: SUPABASE (POSTGRESQL - AUTENTICAÇÃO PRÓPRIA VIA CRUD)
+
+1. Tabela: campeoes
+- id: uuid (PK)
+- nome: text (UNIQUE, NOT NULL)
+- id_riot: text
+- criado_em: timestamptz
+
+2. Tabela: usuarios (Autenticação própria sem supabase.auth)
+- id: uuid (PK)
+- nickname: text (UNIQUE, NOT NULL)
+- senha: text (NOT NULL)
+- criado_em: timestamptz
+
+3. Tabela: conquistas
+- id: text (PK)
+- titulo: text
+- descricao: text
+- icone: text
+- requisito_tipo: text ('acertos_count' | 'crud_action')
+- requisito_qtd: integer
+
+4. Tabela: usuario_acertos
+- id: uuid (PK)
+- usuario_id: uuid (FK -> usuarios.id)
+- campeao_id: uuid (FK -> campeoes.id)
+- descoberto_em: timestamptz
+
+5. Tabela: usuario_conquistas
+- id: uuid (PK)
+- usuario_id: uuid (FK -> usuarios.id)
+- conquista_id: text (FK -> conquistas.id)
+- descoberto_em: timestamptz
